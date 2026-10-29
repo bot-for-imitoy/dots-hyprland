@@ -52,6 +52,7 @@ Singleton {
 
     Component.onCompleted: {
         updateAppCategories();
+        updateUserActionScripts();
     }
 
     // Load user action scripts from ~/.config/illogical-impulse/actions/
@@ -82,6 +83,15 @@ Singleton {
         showDirs: false
         showHidden: false
         sortField: FolderListModel.Name
+    }
+
+    // The folder model loads asynchronously and can change at runtime, so the
+    // action list has to be rebuilt by hand now that it isn't a binding anymore.
+    Connections {
+        target: userActionsFolder
+        function onCountChanged() {
+            Qt.callLater(root.updateUserActionScripts);
+        }
     }
 
     property var searchActions: [
@@ -195,6 +205,15 @@ Singleton {
         rebuildResultsTimer.restart();
     }
 
+    // qalc answers asynchronously, so the math row is built from an empty or
+    // previous value. Rebuild once the answer lands, otherwise it never shows up.
+    onMathResultChanged: {
+        if (root.query.length === 0) return;
+        if (root.query.startsWith(Config.options.search.prefix.clipboard)) return;
+        if (root.query.startsWith(Config.options.search.prefix.emojis)) return;
+        Qt.callLater(root.rebuildResults);
+    }
+
     Timer {
         id: rebuildResultsTimer
         interval: 10
@@ -202,29 +221,34 @@ Singleton {
         onTriggered: root.rebuildResults()
     }
 
-    function clearOldObjects() {
-        for (let i = 0; i < root._activeObjects.length; i++) {
-            if (root._activeObjects[i]) {
-                root._activeObjects[i].destroy();
+    // Swap in the new results first, only then destroy the old objects, so the
+    // UI can never end up holding on to something that has already been deleted.
+    function applyResults(newResults, createdObjects, oldObjects) {
+        root._activeObjects = createdObjects;
+        root.results = newResults;
+        for (let i = 0; i < oldObjects.length; i++) {
+            if (oldObjects[i]) {
+                oldObjects[i].destroy();
             }
         }
-        root._activeObjects = [];
     }
 
     function rebuildResults() {
-        clearOldObjects();
-
-        ///////////// Special cases ///////////////
-        if (root.query === "") {
-            root.results = [];
-            return;
-        }
+        // Objects stay tracked until applyResults() replaces them, so a failure
+        // half way through leaves nothing dangling and nothing leaked.
+        const oldObjects = root._activeObjects;
 
         const createdObjects = [];
         function createResultObj(properties) {
             const obj = resultComp.createObject(null, properties);
             if (obj) createdObjects.push(obj);
             return obj;
+        }
+
+        ///////////// Special cases ///////////////
+        if (root.query === "") {
+            applyResults([], createdObjects, oldObjects);
+            return;
         }
 
         if (root.query.startsWith(Config.options.search.prefix.clipboard)) {
@@ -266,10 +290,9 @@ Singleton {
                 });
             }).filter(Boolean);
 
-            root._activeObjects = createdObjects;
-            root.results = clipObjects;
+            applyResults(clipObjects, createdObjects, oldObjects);
             return;
-        }else if (root.query.startsWith(Config.options.search.prefix.emojis)) {
+        } else if (root.query.startsWith(Config.options.search.prefix.emojis)) {
             const searchString = StringUtils.cleanPrefix(root.query, Config.options.search.prefix.emojis);
             const rawEmojiResults = Emojis.fuzzyQuery(searchString);
             
@@ -288,8 +311,7 @@ Singleton {
                 });
             }).filter(Boolean);
 
-            root._activeObjects = createdObjects;
-            root.results = emojiObjects;
+            applyResults(emojiObjects, createdObjects, oldObjects);
             return;
         }
 
@@ -328,7 +350,7 @@ Singleton {
                 runInTerminal: entry.runInTerminal,
                 genericName: entry.genericName,
                 keywords: entry.keywords,
-                actions: entry.actions.map(action => {
+                actions: (entry.actions ?? []).map(action => {
                     return createResultObj({
                         name: action.name,
                         iconName: action.icon,
@@ -426,8 +448,7 @@ Singleton {
                 finalResults.push(webSearchResultObject);
         }
 
-        root._activeObjects = createdObjects;
-        root.results = finalResults;
+        applyResults(finalResults, createdObjects, oldObjects);
     }
 
     Component {

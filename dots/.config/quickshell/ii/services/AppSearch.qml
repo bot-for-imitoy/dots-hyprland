@@ -68,9 +68,6 @@ Singleton {
         root.rebuildIndex()
     }
 
-    // Icon cache
-    property var _iconCache: ({})
-
     function fuzzyQuery(search: string): var { // Idk why list<DesktopEntry> doesn't work
         if (root.sloppySearch) {
             const results = list.map(obj => ({
@@ -190,6 +187,9 @@ Singleton {
         const rawApps = DesktopEntries.applications.values;
         if (!rawApps) return;
 
+        // Installed apps changed: icon guesses computed from the old entries may be stale
+        root._iconCache = ({});
+
         // Optimize Deduplication Complexity
         const seenIds = new Set();
         const dedupedList = [];
@@ -202,11 +202,9 @@ Singleton {
         }
         root.list = dedupedList;
 
+        // Only `name` is used as the fuzzy key (see fuzzyQuery), keep this cheap
         root.preppedNames = dedupedList.map(a => ({
             name: Fuzzy.prepare(`${a.name} `),
-            id: Fuzzy.prepare(`${a.id} `),
-            extra: Fuzzy.prepare(`${a.genericName ?? ""} ${a.comment ?? ""} ${(a.keywords ?? []).join(" ")} `),
-            merged: `${a.name} ${a.id} ${a.genericName ?? ""} ${a.comment ?? ""} ${(a.keywords ?? []).join(" ")}`.toLowerCase(),
             entry: a
         }));
 
